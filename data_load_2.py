@@ -36,15 +36,14 @@ tag2idx = {tag: idx for idx, tag in enumerate(VOCAB)}
 idx2tag = {idx: tag for idx, tag in enumerate(VOCAB)}
 
 class NerDataset(data.Dataset):
-    def __init__(self, fpath):
+    def __init__(self, entries):
         """
-        fpath: [train|valid|test].txt
+        entries: [([word1, word2,.....], [tags_1,tag_2,.....])]
         """
-        entries = open(fpath, 'r').read().strip().split("\n\n")
         sents, tags_li = [], [] # list of lists
         for entry in entries:
-            words = [line.split()[0] for line in entry.splitlines()]
-            tags = ([line.split()[-1] for line in entry.splitlines()])
+            words = entry[0]
+            tags = entry[1]
             sents.append(["[CLS]"] + words + ["[SEP]"])
             tags_li.append(["<START>"] + tags + ["<STOP>"])  # TODO
             #if '\\u200b' in words:

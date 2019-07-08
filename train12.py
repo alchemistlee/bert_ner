@@ -36,10 +36,10 @@ def train(model, iterator_list, optimizer):
         optimizer.zero_grad()
 
         words, x, is_heads, tags, y, seqlens = grab_data(1)
-        loss1 = model.compute_loss(x, y, 1)
+        loss1 = model.compute_loss(x, y)
 
         words, x, is_heads, tags, y, seqlens = grab_data(2)
-        loss2 = model.compute_loss(x, y, 2)
+        loss2 = model.compute_loss(x, y)
 
         loss = loss1 + loss2
         loss.backward()
@@ -62,57 +62,36 @@ def train(model, iterator_list, optimizer):
 def eval(model, iterator, f):
     model.eval()
 
-    Words, Is_heads, Tags, Y, Y_hat_1, Y_hat_2, X = [], [], [], [], [], [], []
+    Words, Is_heads, Tags, Y, Y_hat = [], [], [], [], []
     with torch.no_grad():
         for i, batch in enumerate(iterator):
             words, x, is_heads, tags, y, seqlens = trunk_batch(batch)
 
-            #if getattr(model, 'crf_double', None) is None:
-            #   _, y_hat = model(x)  # y_hat: (N, T)
-            #else:
-            _, y_hat_1 = model(x, y, 1)  # y_hat: (N, T)
-            _, y_hat_2 = model(x, y, 2)  # y_hat: (N, T)
-            
+            if getattr(model, 'crf', None) is None:
+                _, y_hat = model(x)  # y_hat: (N, T)
+            else:
+                _, y_hat = model(x, y)  # y_hat: (N, T)
+
             Words.extend(words)
-            X.extend(x)
             Is_heads.extend(is_heads)
             Tags.extend(tags)
             Y.extend(y.numpy().tolist())
-            Y_hat_1.extend(y_hat_1.cpu().numpy().tolist() if isinstance(y_hat_1, torch.Tensor) else y_hat_1)
-            Y_hat_2.extend(y_hat_2.cpu().numpy().tolist() if isinstance(y_hat_2, torch.Tensor) else y_hat_2)
+            Y_hat.extend(y_hat.cpu().numpy().tolist() if isinstance(y_hat, torch.Tensor) else y_hat)
 
     ## gets results and save
     with open("temp", 'w') as fout:
-        for rid, (words, is_heads, tags, y_hat_1, y_hat_2, x) in enumerate(zip(Words, Is_heads, Tags, Y_hat_1, Y_hat_2, X)):
-            y_hat_1 = [hat for head, hat in zip(is_heads, y_hat_1) if head == 1]
-            y_hat_2 = [hat for head, hat in zip(is_heads, y_hat_2) if head == 1]
-            preds_1 = [idx2tag[hat] for hat in y_hat_1]
-            preds_2 = [idx2tag[hat] for hat in y_hat_2]
+        for rid, (words, is_heads, tags, y_hat) in enumerate(zip(Words, Is_heads, Tags, Y_hat)):
+            y_hat = [hat for head, hat in zip(is_heads, y_hat) if head == 1]
+            preds = [idx2tag[hat] for hat in y_hat]
             try:
-                assert len(preds_1) == len(words.split()) == len(tags.split()) == len(preds_2)
+                assert len(preds) == len(words.split()) == len(tags.split())
             except AssertionError:
                 print(f'Skipping {rid}')
                 continue
-            
-            # select best seq tag by prob, default crf1 tag
-            preds = preds_1
-            with torch.no_grad():
-                #model.compute_loss(x[0][:24].unsqueeze(0), torch.tensor(y_hat[0]).unsqueeze(0))
-                neg_logprob_1 = model.compute_loss(x[:len(y_hat_1)].unsqueeze(0), torch.tensor(y_hat_1).unsqueeze(0), 1, 'none')
-                neg_logprob_2 = model.compute_loss(x[:len(y_hat_2)].unsqueeze(0), torch.tensor(y_hat_2).unsqueeze(0), 2, 'none')
-                if neg_logprob_1.item() > neg_logprob_2.item():
-                    preds = preds_2
-
-                # 选择prob小的作为tag
-                if neg_logprob_1.item() < 0 or neg_logprob_2.item() < 0:
-                    print('neg_logprob_1: {0}, neg_logprob_2: {1}'.format(neg_logprob_1.item(), neg_logprob_2.item()))
-
             for w, t, p in zip(words.split()[1:-1], tags.split()[1:-1], preds[1:-1]):
                 fout.write(f"{w} {t} {p}\n")
-            #for w, t, p_1, p_2 in zip(words.split()[1:-1], tags.split()[1:-1], preds_1[1:-1], preds_2[1:-1]):
-            #    fout.write(f"{w} {t} {p_1} {p_2}\n")
             fout.write("\n")
-    
+
     ## calc metric
     y_true =  np.array([tag2idx[line.split()[1]] for line in open("temp", 'r').read().splitlines() if len(line) > 0])
     y_pred =  np.array([tag2idx[line.split()[2]] for line in open("temp", 'r').read().splitlines() if len(line) > 0])
@@ -166,14 +145,12 @@ if __name__=="__main__":
     parser.add_argument("--finetuning", dest="finetuning", action="store_true")
     parser.add_argument("--top_rnns", dest="top_rnns", action="store_true")
     parser.add_argument("--logdir", type=str, default="checkpoints/01")
-    #parser.add_argument("--trainset_1", type=str, default="jiashi/brat.txt")
     parser.add_argument("--trainset_1", type=str, default="jiashi/brat.txt")
-    parser.add_argument("--trainset_2", type=str, default="jiashi/new_train.txt")
-    parser.add_argument("--validset", type=str, default="jiashi/merge_valid.txt")
-    parser.add_argument("--model", type=str, default="crf_double")
+    parser.add_argument("--trainset_2", type=str, default="jiashi/mock.txt")
+    parser.add_argument("--validset", type=str, default="jiashi/valid.txt")
+    parser.add_argument("--model", type=str, default="crf")
     parser.add_argument("--lr_decay_pat", type=int, default=3)
     parser.add_argument("--dropout", type=float, default=0.)
-    parser.add_argument("--lin_dim", type=int, default=128)
     hp = parser.parse_args()
 
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -182,9 +159,9 @@ if __name__=="__main__":
     torch.cuda.manual_seed_all(1)
 
     if hp.model == "crf":
-        model = NetCRF(hp.top_rnns, len(VOCAB), device, hp.finetuning, dropout=hp.dropout, lin_dim = hp.lin_dim).cuda()
+        model = NetCRF(hp.top_rnns, len(VOCAB), device, hp.finetuning, dropout=hp.dropout).cuda()
     elif hp.model == "crf_double":
-        model = NetCRFDouble(hp.top_rnns, len(VOCAB), device, hp.finetuning, dropout=hp.dropout, lin_dim = hp.lin_dim).cuda()
+        model = NetCRFDouble(hp.top_rnns, len(VOCAB), device, hp.finetuning, dropout=hp.dropout).cuda()
     else:
         model = Net(hp.top_rnns, len(VOCAB), device, hp.finetuning, dropout=hp.dropout).cuda()
     #model = nn.DataParallel(model)
@@ -235,7 +212,7 @@ if __name__=="__main__":
         print("TRAINING SET Eval ... DONE. ")
         '''
         ################# train eval done..
-        
+
         if f1 > best_f1:
             best_f1 = f1
             torch.save(model.state_dict(), f"{fname}.pt")
